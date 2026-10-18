@@ -259,6 +259,28 @@ host kugisaki {
 
 **Validasi:** kugisaki konsisten mendapat `192.220.3.99` setelah restart node **dan** setelah renew (`ifdown/ifup`); gateway `.3.1` dan opsi DNS/domain tetap benar. Catatan menarik yang terkonfirmasi: `.3.99` **tidak** muncul di `dhcpd.leases` - fixed-address di luar pool adalah binding statik dari deklarasi host, bukan lease dinamis.
 
+di tengen
+```sh
+grep -n -A4 "host kugisaki" /etc/dhcp/dhcpd.conf
+```
+
+di kugisaki
+```sh
+ip -4 addr show dev eth0
+```
+
+```sh
+ifdown eth0 2>&1; sleep 2; ifup eth0
+ip -4 addr show dev eth0
+ping -c 3 192.220.3.1
+cat /etc/resolv.conf
+```
+
+lalu di tengen
+```sh
+grep "192.220.3.99" /var/lib/dhcp/dhcpd.leases; echo "grep-exit=$?"
+```
+
 ![](assets/6_soal6_fixed_addr.png)
 
 ---
@@ -280,7 +302,24 @@ Hasil audit:
 | miwa | 192.220.3.100 | long-lease | 192.220.3.1 | 43200s |
 | kugisaki | 192.220.3.99 | fixed (host) | 192.220.3.1 | statis |
 
+pada tiap node client
+```sh
+ifdown eth0 2>&1; sleep 2; ifup eth0
+ip -4 addr show dev eth0
+ip route | grep default
+cat /etc/resolv.conf
+```
+
 ![](assets/7_soal7_audit_ip.png)
+
+di tengen
+```sh
+grep -E "^lease 192.220" /var/lib/dhcp/dhcpd.leases | sort -t. -k3n,3 -k4n,4
+grep -A6 "lease 192.220.2.10" /var/lib/dhcp/dhcpd.leases | grep -E "hardware|ends"
+grep -A6 "lease 192.220.3.10" /var/lib/dhcp/dhcpd.leases | grep -E "hardware|ends"
+grep "192.220.3.99" /var/lib/dhcp/dhcpd.leases; echo "kugisaki-leases=$?"
+grep -E "^lease 192.220.2\.(3[6-9]|4[0-9]|5[0-9]|6[0-9])" /var/lib/dhcp/dhcpd.leases; echo "forbidden=$?"
+```
 
 ![](assets/7_soal7_dhcpd_leases.png)
 
@@ -297,8 +336,48 @@ Result per client:
 - Server-ID `192.220.4.10`, Your-IP = IP klien sesuai pool-nya, Lease-Time 43200/1800 sesuai class;
 - jalur relay terlihat: DISCOVER/REQUEST `192.220.4.1 >> 192.220.4.10`, OFFER/ACK `192.220.4.10 >> giaddr`.
 
+mulai capture di tengen
+```sh
+rm -f /tmp/dora_n2.txt
+(tcpdump -i eth0 -n -vv udp port 67 or udp port 68 > /tmp/dora_n2.txt 2>&1 &)
+```
+
+di itadori daftar renew
+```sh
+ifdown eth0 2>&1
+ifup eth0 2>&1
+```
+
+lalu di tengen
+```sh
+pkill tcpdump
+cat /tmp/dora_n2.txt
+```
+
+atau
+```sh
+grep -nE "giaddr|yiaddr|siaddr|Server|lease|Client-Ethernet|BOOTP/DHCP" /tmp/dora_n2.txt
+```
 
 ![](assets/8_soal8_tcpdump_n2.png)
+
+di tengen capture
+```sh
+rm -f /tmp/dora_n3.txt
+(tcpdump -i eth0 -n -vv udp port 67 or udp port 68 > /tmp/dora_n3.txt 2>&1 &)
+```
+
+lalu di ino
+```sh
+ifdown eth0 2>&1
+ifup eth0 2>&1
+```
+
+baca di tengen
+```sh
+pkill tcpdump
+grep -nE "giaddr|yiaddr|siaddr|Server|lease|Client-Ethernet|BOOTP/DHCP" /tmp/dora_n3.txt
+```
 
 ![](assets/8_soal8_tcpdump_n3.png)
 
@@ -312,7 +391,47 @@ Jalankan `scripts/soal_9.sh` pada itadori:
 2. **GANGGUAN** - `service isc-dhcp-relay stop` di jichi >> renew klien berakhir `udhcpc failed to get a DHCP lease` (timeout tanpa OFFER), eth0 tanpa IPv4, ping gateway `.2.2` gagal.
 3. **PULIH** - `service isc-dhcp-relay start` >> renew sukses, IP kembali `192.220.2.10` (terikat MAC), gateway semula OK.
 
+cek itadori
+```sh
+ip -4 addr show dev eth0
+ping -c2 =W2 192.220.2.2
+```
+
+cek jichi
+```sh
+pgrep -a dhcrelay
+```
+
+lalu
+```sh
+service isc-dhcp-relay stop
+ps aux | grep dhcrelay | grep -v grep
+```
+
+minta lease baru tanpa relay di itadori
+```sh
+ifdown eth0 2>&1
+ifup eth0 2>&1
+ip -4 addr show dev eth0
+ping -c2 -W2 192.220.2.2
+```
+
 ![](assets/9_soal9_gangguan.png)
+
+pulihkan dhcrelay
+```sh
+service isc-dhcp-relay start
+ps aux | grep dhcrelay | grep -v grep
+```
+
+lalu di itadori
+```sh
+ifdown eth0 2>&1
+ifup eth0 2>&1
+ip -4 addr show dev eth0
+ip route | grep '^default'
+ping -c2 -W2 192.220.2.2
+```
 
 ![](assets/9_soal9_pulih.png)
 
@@ -339,7 +458,39 @@ service isc-dhcp-relay start        # start tanpa syarat - guard status relay me
 
 **Validasi:** kedua node di-restart penuh (stop>>start) >> dhcpd & dhcrelay hidup sendiri; config jichi utuh (5 IP, forwarding, MASQUERADE di-reapply); kebijakan dhcpd.conf utuh; kedelapan klien tidak terpengaruh (IP/gateway/ping + konektivitas lintas subnet itadori>>tengen); renew pembuktian: itadori `.2.10` (pool1), ino lease 1800s, kugisaki `.3.99` (fixed).
 
+di tengen dan jichi
+```sh
+./soal_10.sh
+```
+
+restart kedua node tersebut, lalu di tengen
+```sh
+pgrep -a dhcpd
+grep -c "host kugisaki" /etc/dhcp/dhcpd.conf
+grep -E "pool|range" /etc/dhcp/dhcpd.conf | head -4
+```
+
+di jichi
+```sh
+pgrep -a dhcrelay
+ip -4 addr show eth1 | grep inet && ip -4 addr show eth2 | grep inet && ip -4 addr show eth3 | grep inet && ip -4 addr show eth4 | grep inet
+sysctl net.ipv4.ip_forward
+iptables -t nat -L POSTROUTING -v | grep MASQUERADE
+```
+
 ![](assets/10_soal10_service_status.png)
+
+cek itadori
+```sh
+ip -4 addr show dev eth0 && ip route | grep default
+ping -c3 192.220.2.2
+ping -c3 192.220.4.10
+```
+
+renew lease
+```sh
+ifdown eth0 2>&1; sleep 2; ifup eth0
+```
 
 ![](assets/10_soal10_client_lease.png)
 
