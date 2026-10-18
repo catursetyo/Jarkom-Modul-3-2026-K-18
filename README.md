@@ -394,7 +394,7 @@ Jalankan `scripts/soal_9.sh` pada itadori:
 cek itadori
 ```sh
 ip -4 addr show dev eth0
-ping -c2 =W2 192.220.2.2
+ping -c2 -W2 192.220.2.2
 ```
 
 cek jichi
